@@ -17,13 +17,8 @@ HOST = '127.0.0.1'
 PORT = 7496
 CLIENT_ID = 1
 
-# ===== CONFIGURATION =====
-HOST = '127.0.0.1'
-PORT = 7496
-CLIENT_ID = 1
-
 # Number of calendar days to look back - need enough for BB/KC calculation (20+ period)
-HIST_DAYS = 60  # Kürzere Historie für schnellere Erkennung, immer noch ausreichend für Indikatoren
+HIST_DAYS = 250  # Genügend Historie für vollständige Indikator-Berechnung (20+ Periode)
 OUTPUT_FILE = f'/home/hermes/ttm_squeeze/nasdaq100_tmmsqueeze_log_{datetime.now().strftime("%Y%m%d")}.csv'
 
 # Technical indicator parameters - AGGRESSIVE TOLERANZEN für bessere Erkennung
@@ -54,7 +49,7 @@ def ttm_squeeze_analysis(ib, symbol, conid):
             endDateTime='',
             durationStr=f'{HIST_DAYS} D',
             barSizeSetting='1 day',
-            whatToShow='BAR',  # Changed from 'TRADES' to 'BAR' for OHLC data
+            whatToShow='TRADES',
             useRTH=True,
             formatDate=1,
         )
@@ -91,6 +86,11 @@ def ttm_squeeze_analysis(ib, symbol, conid):
         # Squeeze-On-Status
         squeeze_on = (last_bb_u < last_kc_u) and (last_bb_l > last_kc_l)
         
+        # Momentum-Berechnung (Preisbewegung über 5 Tage)
+        close_tail = close.tail(5)
+        momentum_value = close_tail.iloc[-1] - close_tail.iloc[0]
+        momentum_direction = 'up' if momentum_value > 0 else 'down'
+        
         # Analysedaten
         analysis = {
             'Symbol': symbol,
@@ -123,14 +123,14 @@ def ttm_squeeze_analysis(ib, symbol, conid):
             # Volatilität und Trend-strength
             'Volatility_index': round(std.iloc[-1], 4),
             
-            # Chart-Datenpunkte (letzte HIST_DAYS) - Listenelemente gerundet
+            # Chart-Datenpunkte (letzte HIST_DAYS)
             'Recent_High': [round(x, 4) for x in high.tail(5).tolist()],
             'Recent_Low': [round(x, 4) for x in low.tail(5).tolist()],
-            'Recent_Close': [round(x, 4) for x in close.tail(5).tolist()],
+            'Recent_Close': [round(x, 4) for x in close_tail.tolist()],
             
             # Momentum-Daten (5-Tage-Richtung)
-            'Momentum_Value': round(close.tail(5).iloc[-1] - close.tail(5).iloc[0], 4),
-            'Momentum_Direction': 'up' if close.tail(5).iloc[-1] > close.tail(5).iloc[0] else 'down'
+            'Momentum_Value': round(momentum_value, 4),
+            'Momentum_Direction': momentum_direction
         }
         
         return analysis
@@ -173,7 +173,8 @@ def main():
         'Symbol', 'ConId', 'Timestamp', 'BB_Upper', 'BB_Middle', 'BB_Lower',
         'BB_Width', 'KC_Upper', 'KC_Middle', 'KC_Lower', 'KC_Width', 'ATR',
         'Squeeze_on', 'BB_Inside_KC', 'BB_Outside_KC_Upper', 'BB_Outside_KC_Lower',
-        'Volatility_index', 'Recent_High', 'Recent_Low', 'Recent_Close'
+        'Volatility_index', 'Recent_High', 'Recent_Low', 'Recent_Close',
+        'Momentum_Value', 'Momentum_Direction'
     ]
     
     # Zähle die Ergebnisse
@@ -194,7 +195,7 @@ def main():
             total_analyzed += 1
             if analysis['Squeeze_on']:
                 squeeze_count += 1
-                print(f"🚨 SQUEEZE ERMITTELT: {analysis['Symbol']}!")
+                print(f"🚨 SQUEEZE ERMITTELT: {analysis['Symbol']} (Momentum: {analysis['Momentum_Direction']})!")
             
         # Vermeide Rate-Limits (sanfte Verzögerung)
         if i < len(conids):
@@ -218,7 +219,8 @@ def main():
     print("=" * 50)
     print(f"Verarbeitete Symbole: {total_analyzed}")
     print(f"Symbole mit Squeeze:  {squeeze_count}")
-    print(f"Squeeze-Prozent:      {(squeeze_count/total_analyzed*100):.1f}%")
+    if total_analyzed > 0:
+        print(f"Squeeze-Prozent:      {(squeeze_count/total_analyzed*100):.1f}%")
     print(f"Erfolgreiche Analysen:  {len(results)}/{len(conids)}")
     print(f"\n✅ Analyse abgeschlossen! Ergebnisse gespeichert in:")
     print(f"   {OUTPUT_FILE}")
